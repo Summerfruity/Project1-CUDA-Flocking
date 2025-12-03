@@ -15,6 +15,7 @@
 #include <thrust/device_vector.h>
 
 #include <glm/glm.hpp>
+#include <device_launch_parameters.h>
 
 // LOOK-2.1 potentially useful for doing grid-based neighbor search
 #ifndef imax
@@ -253,8 +254,76 @@ __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *po
 __global__ void kernUpdateVelocityBruteForce(int N, glm::vec3 *pos,
   glm::vec3 *vel1, glm::vec3 *vel2) {
   // Compute a new velocity based on pos and vel1
-  // Clamp the speed
-  // Record the new velocity into vel2. Question: why NOT vel1?
+  // Record the new velocity into vel2. Question: why NOT vel1? £¨To avoid competition in threads£©
+  
+  /* Get current thread */
+    int index = threadIdx.x + (blockDim.x * blockIdx.x);
+    if (index >= N) // check boundry case
+        return ;
+
+/* Get current pos and vel */
+    glm::vec3 myPos = pos[index];
+    glm::vec3 myVel = vel1[index];
+/* Initialize variables */
+    glm::vec3 perceived_center(0.0f);
+    glm::vec3 perceived_vel(0.0f);
+    glm::vec3 counter(0.0f);
+
+    int rule1NeighborCount = 0;
+    int rule3NeighborCount = 0;
+
+
+    for (int i = 0; i < N; i++)
+    {
+        if (i == index)
+            continue;
+
+        glm::vec3 otherPos = pos[i];
+        glm::vec3 otherVel = vel1[i];
+
+        float distance = glm::distance(myPos, otherPos);
+
+        if (distance < rule1Distance)
+        {
+            perceived_center += otherPos;
+            rule1NeighborCount++;
+        }
+            
+        if (distance < rule2Distance)
+            counter -= (otherPos - myPos);
+        if (distance < rule3Distance)
+        {
+            perceived_vel += otherVel;
+            rule3NeighborCount++;
+        }
+            
+
+    }
+    if (rule1NeighborCount > 0)
+        perceived_center /= rule1NeighborCount;
+    if (rule3NeighborCount > 0)
+        perceived_vel /= rule3NeighborCount;
+
+    /* update vel */
+    glm::vec3 newVel = myVel;
+
+    // Rule 1: Cohesion
+    if (rule1NeighborCount > 0)
+    	newVel += (perceived_center - myPos) * rule1Scale;
+
+    // Rule 2: Separation
+    newVel += counter * rule2Scale;
+
+    // Rule 3: Alignment
+    newVel += perceived_vel * rule3Scale;
+
+    // Clamp the speed
+    if (glm::length(newVel) > maxSpeed)
+        newVel = glm::normalize(newVel) * maxSpeed;
+
+    vel2[index] = newVel;
+
+
 }
 
 /**
