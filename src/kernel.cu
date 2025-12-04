@@ -167,6 +167,10 @@ void Boids::initSimulation(int N) {
     dev_pos, scene_scale);
   checkCUDAErrorWithLine("kernGenerateRandomPosArray failed!");
 
+  kernGenerateRandomPosArray <<<fullBlocksPerGrid, blockSize>>> (2, numObjects,
+      dev_vel1, 5.0f);
+  checkCUDAErrorWithLine("kernGenerateRandomVelArray failed!");
+
   // LOOK-2.1 computing grid params
   gridCellWidth = 2.0f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance);
   int halfSideCount = (int)(scene_scale / gridCellWidth) + 1;
@@ -428,6 +432,17 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
 void Boids::stepSimulationNaive(float dt) {
   // TODO-1.2 - use the kernels you wrote to step the simulation forward in time.
   // TODO-1.2 ping-pong the velocity buffers
+    dim3 fullBlocksPerGrid((numObjects + blockSize - 1) / blockSize);
+
+  // Launch the kernel, update vel
+    kernUpdateVelocityBruteForce<<<fullBlocksPerGrid, blockSize>>>(numObjects, dev_pos, dev_vel1, dev_vel2);
+    checkCUDAErrorWithLine("kernUpdateVelocityBruteForce failed!");
+  // Launch the kernel, update pos
+    kernUpdatePos <<<fullBlocksPerGrid, blockSize >>>(numObjects, dt, dev_pos, dev_vel2);
+    checkCUDAErrorWithLine("kernUpdatePos failed!");
+
+  // ping-pong swap
+    std::swap(dev_vel1, dev_vel2);
 }
 
 void Boids::stepSimulationScatteredGrid(float dt) {
