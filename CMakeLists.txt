@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
 project(cis5650_boids LANGUAGES CUDA CXX)
 
+# Helpful for IDE tooling (IntelliSense/clangd). Some generators may ignore it,
+# but it is safe to enable.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
@@ -22,6 +26,11 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(OpenGL REQUIRED)
+
+# CUDA headers are used from host (C++) sources too (e.g. main.cpp). Some IDE
+# tooling doesn't automatically pick up CUDA's include path on Windows unless we
+# explicitly attach it to the target.
+find_package(CUDAToolkit QUIET)
 
 if(UNIX)
     include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
@@ -72,6 +81,15 @@ source_group(Headers FILES ${headers})
 source_group(Sources FILES ${sources})
 
 add_executable(${CMAKE_PROJECT_NAME} ${sources} ${headers})
+
+# Make CUDA headers available to all translation units for both build + IDE.
+if(CUDAToolkit_FOUND)
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+elseif(DEFINED CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES)
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+elseif(DEFINED ENV{CUDA_PATH})
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "$ENV{CUDA_PATH}/include")
+endif()
 target_link_libraries(${CMAKE_PROJECT_NAME} ${GL_LIBRARIES} CCCL::Thrust)
 if(CMAKE_VERSION VERSION_LESS "3.23.0")
     set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CUDA_ARCHITECTURES OFF)
