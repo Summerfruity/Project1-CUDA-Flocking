@@ -148,7 +148,7 @@ __global__ void kernGenerateRandomPosArray(int time, int N, glm::vec3 * arr, flo
 */
 void Boids::initSimulation(int N) {
   numObjects = N;
-  dim3 fullBlocksPerGrid((N + blockSize - 1) / blockSize);
+  dim3 fullBlocksPerGrid((N + blockSize - 1) / blockSize); // computing the number of blocks needed given N and blockSize.
 
   // LOOK-1.2 - This is basic CUDA memory management and error checking.
   // Don't forget to cudaFree in  Boids::endSimulation.
@@ -195,7 +195,7 @@ __global__ void kernCopyPositionsToVBO(int N, glm::vec3 *pos, float *vbo, float 
 
   float c_scale = -1.0f / s_scale;
 
-  if (index < N) {
+  if (index < N) { // VBO expects 4 floats per boid, padding the 4th component with 1.0f 
     vbo[4 * index + 0] = pos[index].x * c_scale;
     vbo[4 * index + 1] = pos[index].y * c_scale;
     vbo[4 * index + 2] = pos[index].z * c_scale;
@@ -240,10 +240,62 @@ void Boids::copyBoidsToVBO(float *vbodptr_positions, float *vbodptr_velocities) 
 * in the `pos` and `vel` arrays.
 */
 __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *pos, const glm::vec3 *vel) {
-  // Rule 1: boids fly towards their local perceived center of mass, which excludes themselves
-  // Rule 2: boids try to stay a distance d away from each other
-  // Rule 3: boids try to match the speed of surrounding boids
-  return glm::vec3(0.0f, 0.0f, 0.0f);
+  const glm::vec3 selfPos = pos[iSelf];
+
+  const float rule1DistanceSq = rule1Distance * rule1Distance;
+  const float rule2DistanceSq = rule2Distance * rule2Distance;
+  const float rule3DistanceSq = rule3Distance * rule3Distance;
+
+  // Rule 1: cohesion
+  int rule1NeighborCount = 0;
+  glm::vec3 perceived_center(0.0f);
+
+  // Rule 2: separation
+  glm::vec3 positionChangeAccumulate(0.0f);
+
+  // Rule 3: alignment
+  int rule3NeighborCount = 0;
+  glm::vec3 perceived_velocity(0.0f);
+
+  for (int i = 0; i < N; i++) {
+    if (i == iSelf) {
+      continue;
+    }
+
+    const glm::vec3 boidPos = pos[i];
+    const glm::vec3 offset = boidPos - selfPos;
+    const float distSq = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
+
+    if (distSq < rule1DistanceSq) {
+      rule1NeighborCount++;
+      perceived_center += boidPos;
+    }
+
+    if (distSq < rule2DistanceSq) {
+      positionChangeAccumulate -= offset;
+    }
+
+    if (distSq < rule3DistanceSq) {
+      rule3NeighborCount++;
+      perceived_velocity += vel[i];
+    }
+  }
+
+  glm::vec3 rule1VelocityChange(0.0f);
+  if (rule1NeighborCount > 0) {
+    perceived_center /= static_cast<float>(rule1NeighborCount); // make sure the result is float
+    rule1VelocityChange = (perceived_center - selfPos) * rule1Scale;
+  }
+
+  const glm::vec3 rule2VelocityChange = positionChangeAccumulate * rule2Scale;
+
+  glm::vec3 rule3VelocityChange(0.0f);
+  if (rule3NeighborCount > 0) {
+    perceived_velocity /= static_cast<float>(rule3NeighborCount);
+    rule3VelocityChange = perceived_velocity * rule3Scale;
+  }
+
+  return rule1VelocityChange + rule2VelocityChange + rule3VelocityChange;
 }
 
 /**
