@@ -166,6 +166,12 @@ void Boids::initSimulation(int N) {
     dev_pos, scene_scale);
   checkCUDAErrorWithLine("kernGenerateRandomPosArray failed!");
 
+  kernGenerateRandomPosArray<<<fullBlocksPerGrid, blockSize>>>(2, numObjects,
+    dev_vel1, 0.1f);
+  checkCUDAErrorWithLine("kernGenerateRandomPosArray failed!");
+
+  cudaMemcpy(dev_vel2, dev_vel1, sizeof(glm::vec3) * N, cudaMemcpyDeviceToDevice);
+
   // LOOK-2.1 computing grid params
   gridCellWidth = 2.0f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance);
   int halfSideCount = (int)(scene_scale / gridCellWidth) + 1;
@@ -179,6 +185,17 @@ void Boids::initSimulation(int N) {
   gridMinimum.z -= halfGridWidth;
 
   // TODO-2.1 TODO-2.3 - Allocate additional buffers here.
+  cudaMalloc((void**)&dev_particleArrayIndices, N * sizeof(int));
+  checkCUDAErrorWithLine("cudaMalloc dev_particleArrayIndices failed!");
+
+  cudaMalloc((void**)&dev_particleGridIndices, N * sizeof(int));
+  checkCUDAErrorWithLine("cudaMalloc dev_particleGridIndices failed!");
+
+  cudaMalloc((void**)&dev_gridCellStartIndices, gridCellCount * sizeof(int));
+  checkCUDAErrorWithLine("cudaMalloc dev_gridCellStartIndices failed!");
+
+  cudaMalloc((void**)&dev_gridCellEndIndices, gridCellCount * sizeof(int));
+  checkCUDAErrorWithLine("cudaMalloc dev_gridCellEndIndices failed!");
   cudaDeviceSynchronize();
 }
 
@@ -305,8 +322,22 @@ __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *po
 __global__ void kernUpdateVelocityBruteForce(int N, glm::vec3 *pos,
   glm::vec3 *vel1, glm::vec3 *vel2) {
   // Compute a new velocity based on pos and vel1
+  int index = threadIdx.x + (blockIdx.x * blockDim.x);
+  if(index >= N) {
+    return;
+  }
+
+  glm::vec3 newVel = vel1[index];
+  newVel += computeVelocityChange(N, index, pos, vel1);
   // Clamp the speed
+  const float maxSpeedSq = maxSpeed * maxSpeed;
+  const float speedSq = newVel.x * newVel.x + newVel.y * newVel.y + newVel.z * newVel.z;
+  if (speedSq > maxSpeedSq && speedSq > 0.0f) {
+    const float scale = maxSpeed * rsqrtf(speedSq);
+    newVel *= scale;
+  }
   // Record the new velocity into vel2. Question: why NOT vel1?
+  vel2[index] = newVel; 
 }
 
 /**
@@ -410,7 +441,16 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
 */
 void Boids::stepSimulationNaive(float dt) {
   // TODO-1.2 - use the kernels you wrote to step the simulation forward in time.
+  dim3 fullBlocksPerGrid((numObjects + blockSize - 1) / blockSize);
+  kernUpdateVelocityBruteForce<<<fullBlocksPerGrid, blockSize >>>(numObjects, dev_pos, dev_vel1, dev_vel2);
+  checkCUDAErrorWithLine("UpdateVelocityBruteForce failed!");
+  kernUpdatePos<<<fullBlocksPerGrid, blockSize >>>(numObjects, dt, dev_pos, dev_vel2);
+  checkCUDAErrorWithLine("UpdatePos failed!");
   // TODO-1.2 ping-pong the velocity buffers
+  glm::vec3* tmp = dev_vel1;
+  dev_vel1 = dev_vel2;
+  dev_vel2 = tmp;
+
 }
 
 void Boids::stepSimulationScatteredGrid(float dt) {
